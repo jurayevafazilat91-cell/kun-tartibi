@@ -3,25 +3,45 @@ import { DEFAULT_SCHEDULES, DAY_KEYS, DAY_LABELS, DAY_FULL, MONTHS, QUOTES, toMi
 import EditModal from './EditModal'
 import AddModal from './AddModal'
 import TimerModal from './TimerModal'
+import StreakBadge from './StreakBadge'
+import WeeklyStats from './WeeklyStats'
+import Big3Goals from './Big3Goals'
+import WorkoutPanel from './WorkoutPanel'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 function loadLS(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key)) ?? fallback }
-  catch { return fallback }
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw === null) return fallback
+    const val = JSON.parse(raw)
+    if (val === null || val === undefined) return fallback
+    if (typeof fallback === 'object' && fallback !== null && !Array.isArray(fallback)) {
+      if (typeof val !== 'object' || Array.isArray(val) || val === null) return fallback
+    }
+    return val
+  } catch { return fallback }
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
 export default function App() {
-  const todayJsDay  = new Date().getDay()            // 0 = Yakshanba
+  const todayJsDay  = new Date().getDay()
   const [selectedDay, setSelectedDay] = useState(todayJsDay)
   const [schedules,   setSchedules]   = useState(() => loadLS('kt_schedules', DEFAULT_SCHEDULES))
   const [checked,     setChecked]     = useState(() => loadLS('kt_checked',   {}))
   const [now,         setNow]         = useState(new Date())
 
+  // NEW: Workout tab
+  const [activeTab, setActiveTab] = useState('schedule') // 'schedule' | 'workout'
+
   // modals
-  const [editModal,  setEditModal]  = useState(null)   // { dayKey, blockIdx }
-  const [addModal,   setAddModal]   = useState(null)   // dayKey string
+  const [editModal,  setEditModal]  = useState(null)
+  const [addModal,   setAddModal]   = useState(null)
   const [timerModal, setTimerModal] = useState(false)
+
+  // streak, weekly stats, big 3 goals
+  const [streak, setStreak] = useState(() => loadLS('kt_streak', { count: 0, lastDate: '' }))
+  const [weekly, setWeekly] = useState(() => loadLS('kt_weekly', {}))
+  const [goals,  setGoals]  = useState(() => loadLS('kt_goals',   {}))
 
   // timer state
   const [timerCustom,  setTimerCustom]  = useState(25)
@@ -34,7 +54,7 @@ export default function App() {
   // notification
   const [notif, setNotif] = useState(null)
 
-  const timerRef   = useRef(null)
+  const timerRef    = useRef(null)
   const reminderRef = useRef(null)
 
   // ── clock ──────────────────────────────────────────────────────────────────
@@ -43,9 +63,19 @@ export default function App() {
     return () => clearInterval(iv)
   }, [])
 
+  // ── pwa ────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if ('serviceWorker' in navigator && import.meta.env.PROD) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {})
+    }
+  }, [])
+
   // ── persist ────────────────────────────────────────────────────────────────
   useEffect(() => { localStorage.setItem('kt_schedules', JSON.stringify(schedules)) }, [schedules])
   useEffect(() => { localStorage.setItem('kt_checked',   JSON.stringify(checked))   }, [checked])
+  useEffect(() => { localStorage.setItem('kt_streak',    JSON.stringify(streak))    }, [streak])
+  useEffect(() => { localStorage.setItem('kt_weekly',    JSON.stringify(weekly))    }, [weekly])
+  useEffect(() => { localStorage.setItem('kt_goals',     JSON.stringify(goals))     }, [goals])
 
   // ── timer ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -111,6 +141,23 @@ export default function App() {
   const pct       = sched.length ? Math.round((doneCount / sched.length) * 100) : 0
   const quote     = QUOTES[new Date().getDay() % QUOTES.length]
 
+  // ── streak + weekly stats ──────────────────────────────────────────────────
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+  useEffect(() => {
+    if (pct === 100 && streak.lastDate !== todayStr) {
+      const yest = new Date(now)
+      yest.setDate(yest.getDate() - 1)
+      const yestStr = `${yest.getFullYear()}-${String(yest.getMonth()+1).padStart(2,'0')}-${String(yest.getDate()).padStart(2,'0')}`
+      setStreak(s => ({
+        count: s.lastDate === yestStr ? s.count + 1 : 1,
+        lastDate: todayStr,
+      }))
+    }
+    if (sched.length) {
+      setWeekly(w => ({ ...w, [todayStr]: pct }))
+    }
+  }, [todayStr, pct, streak.lastDate, sched.length])
+
   // ── helpers ────────────────────────────────────────────────────────────────
   function showNotif(msg, color = 'accent') {
     setNotif({ msg, color })
@@ -119,6 +166,11 @@ export default function App() {
 
   function toggleCheck(blockId) {
     const key = `${selectedDay}_${blockId}`
+    setChecked(c => ({ ...c, [key]: !c[key] }))
+  }
+
+  // NEW: workout checkbox toggle
+  function toggleWorkout(key) {
     setChecked(c => ({ ...c, [key]: !c[key] }))
   }
 
@@ -260,6 +312,13 @@ export default function App() {
           </div>
         </div>
 
+        {/* ── STREAK + BIG 3 + WEEKLY ── */}
+        <div className="grid gap-4 mb-6">
+          <StreakBadge streak={streak} />
+          <Big3Goals goals={goals} onUpdate={setGoals} />
+          <WeeklyStats stats={weekly} />
+        </div>
+
         {/* ── DAY TABS ── */}
         <div className="flex gap-2 mb-5 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
           {DAY_LABELS.map((label, i) => (
@@ -278,116 +337,144 @@ export default function App() {
           ))}
         </div>
 
-        {/* ── SCHEDULE ── */}
-        <div className="flex flex-col gap-2 mb-6">
-          {sched.map((block, i) => {
-            const done      = !!checked[`${selectedDay}_${block.id}`]
-            const isCurrent = i === currentBlockIdx
-            return (
-              <div
-                key={block.id}
-                className="block-hover items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer"
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '100px 1fr auto auto',
-                  background:   isCurrent ? 'rgba(255,209,102,0.06)' : '#0f0f1a',
-                  borderColor:  isCurrent ? 'rgba(255,209,102,0.4)' : done ? 'rgba(67,233,123,0.2)' : '#1e1e35',
-                  borderLeft:   `3px solid ${isCurrent ? '#ffd166' : done ? '#43e97b' : '#1e1e35'}`,
-                  opacity:      done ? 0.55 : 1,
-                }}
-                onClick={() => toggleCheck(block.id)}
-              >
-                {/* time */}
-                <div className="text-xs" style={{ color: isCurrent ? '#ffd166' : '#4a4a6a' }}>
-                  {block.time}
-                </div>
+        {/* ── CONTENT TABS: Schedule | Mashg'ulotlar ── */}
+        <div className="flex gap-2 mb-5">
+          {[
+            { key: 'schedule', label: '📅 Kun tartibi' },
+            { key: 'workout',  label: '⚽ Mashg\'ulotlar' },
+          ].map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className="flex-1 py-2.5 rounded-xl text-xs font-mono border transition-all duration-200"
+              style={{
+                background:  activeTab === tab.key ? (tab.key === 'workout' ? '#43e97b' : '#6c63ff') : '#0f0f1a',
+                borderColor: activeTab === tab.key ? (tab.key === 'workout' ? '#43e97b' : '#6c63ff') : '#1e1e35',
+                color:       activeTab === tab.key ? '#070710' : '#4a4a6a',
+                fontWeight:  activeTab === tab.key ? 700 : 400,
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-                {/* info */}
-                <div>
+        {/* ── SCHEDULE TAB ── */}
+        {activeTab === 'schedule' && (
+          <>
+            <div className="flex flex-col gap-2 mb-6">
+              {sched.map((block, i) => {
+                const done      = !!checked[`${selectedDay}_${block.id}`]
+                const isCurrent = i === currentBlockIdx
+                return (
                   <div
-                    className="text-sm flex items-center gap-2 flex-wrap"
-                    style={{ color: '#ddddf0', textDecoration: done ? 'line-through' : 'none' }}
+                    key={block.id}
+                    className="block-hover items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '100px 1fr auto auto',
+                      background:   isCurrent ? 'rgba(255,209,102,0.06)' : '#0f0f1a',
+                      borderColor:  isCurrent ? 'rgba(255,209,102,0.4)' : done ? 'rgba(67,233,123,0.2)' : '#1e1e35',
+                      borderLeft:   `3px solid ${isCurrent ? '#ffd166' : done ? '#43e97b' : '#1e1e35'}`,
+                      opacity:      done ? 0.55 : 1,
+                    }}
+                    onClick={() => toggleCheck(block.id)}
                   >
-                    <span>{block.emoji}</span>
-                    <span>{block.title}</span>
-                    {isCurrent && (
-                      <span
-                        className="text-xs px-2 py-0.5 rounded-full border"
-                        style={{ background: 'rgba(255,209,102,0.1)', borderColor: 'rgba(255,209,102,0.3)', color: '#ffd166' }}
+                    <div className="text-xs" style={{ color: isCurrent ? '#ffd166' : '#4a4a6a' }}>
+                      {block.time}
+                    </div>
+                    <div>
+                      <div
+                        className="text-sm flex items-center gap-2 flex-wrap"
+                        style={{ color: '#ddddf0', textDecoration: done ? 'line-through' : 'none' }}
                       >
-                        <span
-                          className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle animate-blink"
-                          style={{ background: '#ffd166' }}
-                        />
-                        hozir
-                      </span>
-                    )}
+                        <span>{block.emoji}</span>
+                        <span>{block.title}</span>
+                        {isCurrent && (
+                          <span
+                            className="text-xs px-2 py-0.5 rounded-full border"
+                            style={{ background: 'rgba(255,209,102,0.1)', borderColor: 'rgba(255,209,102,0.3)', color: '#ffd166' }}
+                          >
+                            <span
+                              className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle animate-blink"
+                              style={{ background: '#ffd166' }}
+                            />
+                            hozir
+                          </span>
+                        )}
+                      </div>
+                      {block.note && (
+                        <div className="text-xs mt-0.5" style={{ color: '#4a4a6a' }}>{block.note}</div>
+                      )}
+                    </div>
+                    <button
+                      onClick={e => { e.stopPropagation(); setEditModal({ dayKey, blockIdx: i }) }}
+                      className="text-xs px-2 py-1 rounded-lg border transition-all hover:border-accent"
+                      style={{ borderColor: '#1e1e35', color: '#4a4a6a', background: 'transparent' }}
+                    >
+                      ✏️
+                    </button>
+                    <div
+                      className="w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs flex-shrink-0 transition-all"
+                      style={{
+                        borderColor: done ? '#43e97b' : isCurrent ? '#ffd166' : '#1e1e35',
+                        background:  done ? '#43e97b' : 'transparent',
+                        color:       done ? '#070710' : 'transparent',
+                      }}
+                    >
+                      {done ? '✓' : ''}
+                    </div>
                   </div>
-                  {block.note && (
-                    <div className="text-xs mt-0.5" style={{ color: '#4a4a6a' }}>{block.note}</div>
-                  )}
-                </div>
+                )
+              })}
+            </div>
 
-                {/* edit */}
-                <button
-                  onClick={e => { e.stopPropagation(); setEditModal({ dayKey, blockIdx: i }) }}
-                  className="text-xs px-2 py-1 rounded-lg border transition-all hover:border-accent"
-                  style={{ borderColor: '#1e1e35', color: '#4a4a6a', background: 'transparent' }}
-                >
-                  ✏️
-                </button>
+            {/* ACTIONS */}
+            <div className="flex gap-3 flex-wrap mb-6">
+              <button
+                onClick={resetDay}
+                className="px-4 py-2 rounded-full text-xs border font-mono transition-opacity hover:opacity-80"
+                style={{ background: '#6c63ff', borderColor: '#6c63ff', color: '#fff' }}
+              >
+                🔄 Qayta boshlash
+              </button>
+              <button
+                onClick={() => setAddModal(dayKey)}
+                className="px-4 py-2 rounded-full text-xs border font-mono transition-all hover:border-accent3"
+                style={{ background: '#0f0f1a', borderColor: '#1e1e35', color: '#4a4a6a' }}
+              >
+                ➕ Blok qo'shish
+              </button>
+              <button
+                onClick={() => setTimerModal(true)}
+                className="px-4 py-2 rounded-full text-xs border font-mono transition-all hover:border-now"
+                style={{ background: '#0f0f1a', borderColor: '#1e1e35', color: timerRunning ? '#ffd166' : '#4a4a6a' }}
+              >
+                ⏱️ Taymer {timerRunning ? `(${String(Math.floor(timerSecs/60)).padStart(2,'0')}:${String(timerSecs%60).padStart(2,'0')})` : ''}
+              </button>
+              <button
+                onClick={() => setReminderOn(r => !r)}
+                className="px-4 py-2 rounded-full text-xs border font-mono transition-all"
+                style={{
+                  background:  '#0f0f1a',
+                  borderColor: reminderOn ? 'rgba(67,233,123,0.4)' : '#1e1e35',
+                  color:       reminderOn ? '#43e97b' : '#4a4a6a',
+                }}
+              >
+                🔔 Eslatmalar {reminderOn ? 'yoq' : "o'ch"}
+              </button>
+            </div>
+          </>
+        )}
 
-                {/* check */}
-                <div
-                  className="w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs flex-shrink-0 transition-all"
-                  style={{
-                    borderColor: done ? '#43e97b' : isCurrent ? '#ffd166' : '#1e1e35',
-                    background:  done ? '#43e97b' : 'transparent',
-                    color:       done ? '#070710' : 'transparent',
-                  }}
-                >
-                  {done ? '✓' : ''}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* ── ACTIONS ── */}
-        <div className="flex gap-3 flex-wrap mb-6">
-          <button
-            onClick={resetDay}
-            className="px-4 py-2 rounded-full text-xs border font-mono transition-opacity hover:opacity-80"
-            style={{ background: '#6c63ff', borderColor: '#6c63ff', color: '#fff' }}
-          >
-            🔄 Qayta boshlash
-          </button>
-          <button
-            onClick={() => setAddModal(dayKey)}
-            className="px-4 py-2 rounded-full text-xs border font-mono transition-all hover:border-accent3"
-            style={{ background: '#0f0f1a', borderColor: '#1e1e35', color: '#4a4a6a' }}
-          >
-            ➕ Blok qo'shish
-          </button>
-          <button
-            onClick={() => setTimerModal(true)}
-            className="px-4 py-2 rounded-full text-xs border font-mono transition-all hover:border-now"
-            style={{ background: '#0f0f1a', borderColor: '#1e1e35', color: timerRunning ? '#ffd166' : '#4a4a6a' }}
-          >
-            ⏱️ Taymer {timerRunning ? `(${String(Math.floor(timerSecs/60)).padStart(2,'0')}:${String(timerSecs%60).padStart(2,'0')})` : ''}
-          </button>
-          <button
-            onClick={() => setReminderOn(r => !r)}
-            className="px-4 py-2 rounded-full text-xs border font-mono transition-all"
-            style={{
-              background:  '#0f0f1a',
-              borderColor: reminderOn ? 'rgba(67,233,123,0.4)' : '#1e1e35',
-              color:       reminderOn ? '#43e97b' : '#4a4a6a',
-            }}
-          >
-            🔔 Eslatmalar {reminderOn ? 'yoq' : "o'ch"}
-          </button>
-        </div>
+        {/* ── WORKOUT TAB ── */}
+        {activeTab === 'workout' && (
+          <WorkoutPanel
+            dayType={dayKey}
+            checked={checked}
+            onToggle={toggleWorkout}
+          />
+        )}
 
         {/* ── QUOTE ── */}
         <div
